@@ -1,6 +1,9 @@
 name: Fetch AEMO Forecast
 
 on:
+  push:
+    branches:
+      - main
   schedule:
     # Runs at 7 and 37 minutes past every hour
     - cron: '7,37 * * * *'
