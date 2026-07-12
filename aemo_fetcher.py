@@ -21,9 +21,11 @@ def fetch_aemo_data(report_type):
     if report_type == "forecast":
         base_url = "https://nemweb.com.au/Reports/Current/PredispatchIS_Reports/"
         pattern = "PUBLIC_PREDISPATCHIS"
+        target_table_name = "PREDISPATCHPRICE" # We want the price table
     else:
         base_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
-        pattern = "PUBLIC_DISPATCH" # Catch-all
+        pattern = "PUBLIC_DISPATCHIS"
+        target_table_name = "DISPATCHPRICE" # We want the price table
 
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -34,8 +36,8 @@ def fetch_aemo_data(report_type):
         
         if not target_files: return []
             
-        # Check last 3 files
-        selected_files = target_files[-3:]
+        # Get the last 5 files to get enough history
+        selected_files = target_files[-5:]
         data = []
         
         for selected_file in selected_files:
@@ -46,30 +48,36 @@ def fetch_aemo_data(report_type):
                 for csv_filename in [f for f in z.namelist() if f.lower().endswith('.csv')]:
                     with z.open(csv_filename) as f:
                         lines = f.read().decode('utf-8', errors='ignore').splitlines()
-                        # --- DIAGNOSTIC PRINT ---
-                        print(f"DEBUG: File {csv_filename} snippet (first 5 rows):")
-                        for i, line in enumerate(lines[:5]):
-                            print(f"  Line {i}: {line}")
-                        # -------------------------
-                        
                         reader = csv.reader(lines)
+                        
+                        headers = []
                         for row in reader:
                             if not row: continue
-                            # Logic: If row is a data row and contains QLD1, append it
-                            # We are searching for 'QLD1' anywhere in the row if specific column logic fails
-                            if 'QLD1' in row:
-                                data.append({"datetime": "DEBUG", "region": "QLD1", "price": 0.0})
-        
+                            # Look for the specific table name we want
+                            if row[0] == 'I' and target_table_name in row:
+                                headers = row
+                            # Parse data rows
+                            elif row[0] == 'D' and headers and row[2] == target_table_name:
+                                row_dict = dict(zip(headers, row))
+                                if row_dict.get('REGIONID') == TARGET_REGION:
+                                    time_str = row_dict.get('SETTLEMENTDATE') or row_dict.get('DATETIME')
+                                    try:
+                                        dt = datetime.strptime(time_str, '%Y/%m/%d %H:%M:%S')
+                                        rrp = float(row_dict.get('RRP', 0)) / 1000
+                                        final_price = rrp + get_retail_premium(dt)
+                                        data.append({"datetime": time_str, "region": TARGET_REGION, "price": round(final_price, 4)})
+                                    except: continue
         return data
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error fetching {report_type}: {e}")
         return []
 
 if __name__ == "__main__":
     forecast_data = fetch_aemo_data("forecast")
     actuals_data = fetch_aemo_data("actuals")
     
-    # Send whatever we found to the webhook
     payload = {"type": "combined", "forecast": forecast_data, "actuals": actuals_data}
-    requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload, allow_redirects=True)
-    print(f"Push complete. Actuals row count found in search: {len(actuals_data)}")
+    
+    if forecast_data or actuals_data:
+        requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload, allow_redirects=True)
+        print(f"Push complete. Forecast: {len(forecast_data)}, Actuals: {len(actuals_data)}")
