@@ -39,18 +39,29 @@ def fetch_aemo_forecast():
             reader = csv.reader(lines)
             
             headers = []
+            target_table = None
+            
             for row in reader:
                 if not row:
                     continue
                 row_type = row[0]
                 
-                if row_type == 'I' and row[2] == 'PRICE':
-                    headers = row
-                elif row_type == 'D' and row[2] == 'PRICE':
+                # 1. Identify the table dynamically by checking its columns instead of its name
+                if row_type == 'I':
+                    if 'RRP' in row and 'REGIONID' in row:
+                        headers = row
+                        target_table = row[2] # Lock onto this table name dynamically
+                
+                # 2. Extract the data only if it matches our locked target table
+                elif row_type == 'D' and target_table and row[2] == target_table:
                     row_dict = dict(zip(headers, row))
+                    
                     if row_dict.get('REGIONID') == TARGET_REGION:
+                        # AEMO occasionally swaps between DATETIME and SETTLEMENTDATE
+                        time_val = row_dict.get('DATETIME') or row_dict.get('SETTLEMENTDATE')
+                        
                         forecast_data.append({
-                            "datetime": row_dict.get('DATETIME'),
+                            "datetime": time_val,
                             "region": row_dict.get('REGIONID'),
                             "price": float(row_dict.get('RRP', 0))
                         })
