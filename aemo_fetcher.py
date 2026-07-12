@@ -6,13 +6,27 @@ import csv
 import json
 import os
 from urllib.parse import urljoin
+from datetime import datetime
 
 GOOGLE_SHEETS_WEBHOOK_URL = os.environ.get("GOOGLE_WEBHOOK_URL")
 TARGET_REGION = "QLD1"
 
-# Adjust this number to match your retail rate premium (in $/kWh)
-# Example: If you pay 30c/kWh flat, set this to 0.25 (as a rough estimate for non-spot costs)
-RETAIL_PREMIUM_PER_KWH = 0.25 
+# --- YOUR TARIFF SETTINGS ---
+# Adjust these values based on your bill (in $/kWh)
+# E.g., Off-Peak might have lower network charges, Peak has high charges.
+PEAK_PREMIUM = 0.45 
+OFF_PEAK_PREMIUM = 0.15
+
+def get_retail_premium(dt):
+    """
+    Apply logic based on Brisbane QLD Tariff windows.
+    Modify the '16' (4 PM) and '20' (8 PM) to match your peak window.
+    """
+    # Peak window: 4 PM (16:00) to 8 PM (20:00)
+    if 16 <= dt.hour < 20:
+        return PEAK_PREMIUM
+    else:
+        return OFF_PEAK_PREMIUM
 
 def fetch_aemo_forecast():
     base_url = "https://nemweb.com.au/Reports/Current/PredispatchIS_Reports/"
@@ -46,19 +60,25 @@ def fetch_aemo_forecast():
                     elif row[0] == 'D' and target_table and row[2] == target_table:
                         row_dict = dict(zip(headers, row))
                         if row_dict.get('REGIONID') == TARGET_REGION:
-                            # 1. Convert MWh to kWh (/1000)
-                            # 2. Add your Retail Premium to make it look like your bill
-                            raw_price = float(row_dict.get('RRP', 0)) / 1000
-                            final_price = raw_price + RETAIL_PREMIUM_PREMIUM_PER_KWH
+                            # Parse AEMO time format (YYYY/MM/DD HH:MM:SS)
+                            time_str = row_dict.get('DATETIME') or row_dict.get('SETTLEMENTDATE')
+                            dt = datetime.strptime(time_str, '%Y/%m/%d %H:%M:%S')
+                            
+                            # Wholesale price (converted to $/kWh)
+                            wholesale_price = float(row_dict.get('RRP', 0)) / 1000
+                            
+                            # Add dynamic retail premium
+                            final_price = wholesale_price + get_retail_premium(dt)
                             
                             forecast_data.append({
-                                "datetime": row_dict.get('DATETIME') or row_dict.get('SETTLEMENTDATE'),
+                                "datetime": time_str,
                                 "region": row_dict.get('REGIONID'),
                                 "price": round(final_price, 4)
                             })
 
         if forecast_data:
             requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=forecast_data, allow_redirects=True)
+            print("Successfully pushed data with TOU tariff logic.")
             
     except Exception as e:
         print(f"Error: {e}")
