@@ -1,0 +1,24 @@
+name: Fetch AEMO Forecast
+
+on:
+  schedule:
+    # Runs at 7 and 37 minutes past every hour to avoid the GitHub queue backlog
+    - cron: '7,37 * * * *'
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  run-extractor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Python script
+        env:
+          GOOGLE_WEBHOOK_URL: ${{ secrets.GOOGLE_WEBHOOK_URL }}
+        run: python aemo_fetcher.py
