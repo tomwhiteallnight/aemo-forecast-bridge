@@ -21,11 +21,12 @@ def fetch_aemo_data(report_type):
     if report_type == "forecast":
         base_url = "https://nemweb.com.au/Reports/Current/PredispatchIS_Reports/"
         pattern = "PUBLIC_PREDISPATCHIS"
-        limit = 1 
+        limit = 1
     else:
         base_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
-        pattern = "PUBLIC_DISPATCH"
-        limit = 100 # Fetch last 100 files (~8 hours of data)
+        # We look for DISPATCHPRICE because that is the historical aggregate file
+        pattern = "PUBLIC_DISPATCHPRICE"
+        limit = 20 
 
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -40,6 +41,7 @@ def fetch_aemo_data(report_type):
         data = []
         
         for selected_file in selected_files:
+            file_match_count = 0 # Debug counter
             zip_url = urljoin(base_url, selected_file)
             zip_response = requests.get(zip_url, headers=headers)
             
@@ -63,7 +65,9 @@ def fetch_aemo_data(report_type):
                                         price = float(row_dict.get('RRP', 0)) / 1000
                                         final_price = price + get_retail_premium(dt)
                                         data.append({"datetime": time_str, "region": TARGET_REGION, "price": round(final_price, 4)})
+                                        file_match_count += 1
                                     except: continue
+            print(f"DEBUG: File {selected_file} yielded {file_match_count} rows.")
         return data
     except Exception as e:
         print(f"Error fetching {report_type}: {e}")
