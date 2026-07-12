@@ -5,7 +5,6 @@ import io
 import csv
 import json
 import os
-import traceback
 from urllib.parse import urljoin
 from datetime import datetime
 
@@ -19,23 +18,25 @@ def get_retail_premium(dt):
     else: return 0.20 # Shoulder
 
 def fetch_aemo_data(report_type):
-    try:
-        if report_type == "forecast":
-            base_url = "https://nemweb.com.au/Reports/Current/PredispatchIS_Reports/"
-            pattern = "PUBLIC_PREDISPATCHIS"
-        else:
-            base_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
-            pattern = "PUBLIC_DISPATCH"
+    if report_type == "forecast":
+        base_url = "https://nemweb.com.au/Reports/Current/PredispatchIS_Reports/"
+        pattern = "PUBLIC_PREDISPATCHIS"
+        limit = 1 
+    else:
+        base_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
+        pattern = "PUBLIC_DISPATCH"
+        limit = 100 # Fetch last 100 files (~8 hours of data)
 
-        headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    try:
         response = requests.get(base_url, headers=headers)
         all_files = re.findall(r'href="([^"]+\.zip)"', response.text, re.IGNORECASE)
         target_files = sorted([f for f in all_files if pattern in f.upper()])
         
-        if not target_files:
-            return []
+        if not target_files: return []
             
-        selected_files = target_files[-2:] # Fetch last 2 to be safe
+        selected_files = target_files[-limit:]
         data = []
         
         for selected_file in selected_files:
@@ -47,21 +48,14 @@ def fetch_aemo_data(report_type):
                     with z.open(csv_filename) as f:
                         lines = f.read().decode('utf-8', errors='ignore').splitlines()
                         reader = csv.reader(lines)
-                        
-                        csv_headers = []
-                        target_table = None
-                        
+                        headers, target_table = [], None
                         for row in reader:
                             if not row: continue
-                            # Find Header row
                             if row[0] == 'I' and 'RRP' in row and 'REGIONID' in row:
-                                csv_headers = row
-                                target_table = row[2]
-                            # Find Data row
+                                headers, target_table = row, row[2]
                             elif row[0] == 'D' and target_table and row[2] == target_table:
-                                if len(row) != len(csv_headers): continue
-                                row_dict = dict(zip(csv_headers, row))
-                                
+                                if len(row) < len(headers): continue
+                                row_dict = dict(zip(headers, row))
                                 if row_dict.get('REGIONID') == TARGET_REGION:
                                     time_str = row_dict.get('DATETIME') or row_dict.get('SETTLEMENTDATE')
                                     try:
@@ -71,37 +65,16 @@ def fetch_aemo_data(report_type):
                                         data.append({"datetime": time_str, "region": TARGET_REGION, "price": round(final_price, 4)})
                                     except: continue
         return data
-
-    except Exception:
-        print(f"CRITICAL ERROR in {report_type}:")
-        print(traceback.format_exc())
+    except Exception as e:
+        print(f"Error fetching {report_type}: {e}")
         return []
 
 if __name__ == "__main__":
-    try:
-        print("Starting fetch...")
-        forecast_data = fetch_aemo_data("forecast")
-        actuals_data = fetch_aemo_data("actuals")
-        
-        payload = {
-            "type": "combined", 
-            "forecast": forecast_data, 
-            "actuals": actuals_data
-        }
-        
-        print(f"Data collected. Sending to webhook. Forecast: {len(forecast_data)}, Actuals: {len(actuals_data)}")
-        
-        if GOOGLE_SHEETS_WEBHOOK_URL:
-            # We explicitly dump to JSON to ensure the format is strictly dictionary-based
-            response = requests.post(
-                GOOGLE_SHEETS_WEBHOOK_URL, 
-                json=payload, 
-                headers={'Content-Type': 'application/json'}
-            )
-            print(f"Response: {response.status_code}")
-        else:
-            print("No webhook URL configured.")
-            
-    except Exception:
-        print("CRITICAL ERROR in main execution:")
-        print(traceback.format_exc())
+    forecast_data = fetch_aemo_data("forecast")
+    actuals_data = fetch_aemo_data("actuals")
+    
+    payload = {"type": "combined", "forecast": forecast_data, "actuals": actuals_data}
+    
+    if forecast_data or actuals_data:
+        requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload, allow_redirects=True)
+        print(f"Push complete. Forecast: {len(forecast_data)}, Actuals: {len(actuals_data)}")
