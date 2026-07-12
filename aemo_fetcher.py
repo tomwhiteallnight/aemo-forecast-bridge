@@ -74,3 +74,4 @@ if __name__ == "__main__":
     
     if GOOGLE_WEBHOOK_URL:
         requests.post(GOOGLE_WEBHOOK_URL, json={"forecast": forecast, "actuals": actuals})
+
