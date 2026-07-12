@@ -5,7 +5,6 @@ on:
     branches:
       - main
   schedule:
-    # Runs at 7 and 37 minutes past every hour
     - cron: '7,37 * * * *'
   workflow_dispatch:
 
@@ -23,10 +22,13 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install requests
 
-      - name: Run Python script
+      - name: Verify files and Run
         env:
           GOOGLE_WEBHOOK_URL: ${{ secrets.GOOGLE_WEBHOOK_URL }}
-        run: python aemo_fetcher.py
+        run: |
+          echo "--- Checking directory contents ---"
+          ls -la
+          echo "--- Running script ---"
+          python aemo_fetcher.py
