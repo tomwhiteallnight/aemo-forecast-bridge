@@ -21,12 +21,9 @@ def fetch_aemo_data(report_type):
     if report_type == "forecast":
         base_url = "https://nemweb.com.au/Reports/Current/PredispatchIS_Reports/"
         pattern = "PUBLIC_PREDISPATCHIS"
-        limit = 1
     else:
         base_url = "https://nemweb.com.au/Reports/Current/DispatchIS_Reports/"
-        # We look for DISPATCHPRICE because that is the historical aggregate file
-        pattern = "PUBLIC_DISPATCHPRICE"
-        limit = 20 
+        pattern = "PUBLIC_DISPATCH" # Catch-all
 
     headers = {'User-Agent': 'Mozilla/5.0'}
     
@@ -37,11 +34,11 @@ def fetch_aemo_data(report_type):
         
         if not target_files: return []
             
-        selected_files = target_files[-limit:]
+        # Check last 3 files
+        selected_files = target_files[-3:]
         data = []
         
         for selected_file in selected_files:
-            file_match_count = 0 # Debug counter
             zip_url = urljoin(base_url, selected_file)
             zip_response = requests.get(zip_url, headers=headers)
             
@@ -49,36 +46,30 @@ def fetch_aemo_data(report_type):
                 for csv_filename in [f for f in z.namelist() if f.lower().endswith('.csv')]:
                     with z.open(csv_filename) as f:
                         lines = f.read().decode('utf-8', errors='ignore').splitlines()
+                        # --- DIAGNOSTIC PRINT ---
+                        print(f"DEBUG: File {csv_filename} snippet (first 5 rows):")
+                        for i, line in enumerate(lines[:5]):
+                            print(f"  Line {i}: {line}")
+                        # -------------------------
+                        
                         reader = csv.reader(lines)
-                        headers, target_table = [], None
                         for row in reader:
                             if not row: continue
-                            if row[0] == 'I' and 'RRP' in row and 'REGIONID' in row:
-                                headers, target_table = row, row[2]
-                            elif row[0] == 'D' and target_table and row[2] == target_table:
-                                if len(row) < len(headers): continue
-                                row_dict = dict(zip(headers, row))
-                                if row_dict.get('REGIONID') == TARGET_REGION:
-                                    time_str = row_dict.get('DATETIME') or row_dict.get('SETTLEMENTDATE')
-                                    try:
-                                        dt = datetime.strptime(time_str, '%Y/%m/%d %H:%M:%S')
-                                        price = float(row_dict.get('RRP', 0)) / 1000
-                                        final_price = price + get_retail_premium(dt)
-                                        data.append({"datetime": time_str, "region": TARGET_REGION, "price": round(final_price, 4)})
-                                        file_match_count += 1
-                                    except: continue
-            print(f"DEBUG: File {selected_file} yielded {file_match_count} rows.")
+                            # Logic: If row is a data row and contains QLD1, append it
+                            # We are searching for 'QLD1' anywhere in the row if specific column logic fails
+                            if 'QLD1' in row:
+                                data.append({"datetime": "DEBUG", "region": "QLD1", "price": 0.0})
+        
         return data
     except Exception as e:
-        print(f"Error fetching {report_type}: {e}")
+        print(f"Error: {e}")
         return []
 
 if __name__ == "__main__":
     forecast_data = fetch_aemo_data("forecast")
     actuals_data = fetch_aemo_data("actuals")
     
+    # Send whatever we found to the webhook
     payload = {"type": "combined", "forecast": forecast_data, "actuals": actuals_data}
-    
-    if forecast_data or actuals_data:
-        requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload, allow_redirects=True)
-        print(f"Push complete. Forecast: {len(forecast_data)}, Actuals: {len(actuals_data)}")
+    requests.post(GOOGLE_SHEETS_WEBHOOK_URL, json=payload, allow_redirects=True)
+    print(f"Push complete. Actuals row count found in search: {len(actuals_data)}")
